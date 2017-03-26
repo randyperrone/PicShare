@@ -3,7 +3,11 @@ package com.example.randy.picshare.Activities;
 import android.annotation.SuppressLint;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.media.Image;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.provider.MediaStore;
 import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
@@ -12,13 +16,19 @@ import android.support.v7.app.ActionBar;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.os.Handler;
+import android.support.v7.widget.GridLayoutManager;
+import android.support.v7.widget.RecyclerView;
+import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ImageView;
 
 import com.example.randy.picshare.Manifest;
 import com.example.randy.picshare.Model.ImageGetterFromDevice;
 import com.example.randy.picshare.R;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 
 /**
@@ -100,6 +110,7 @@ public class MediaActivity extends AppCompatActivity {
 
     final int PERMISSION_READ_EXTERNAL = 111;
     private ArrayList<ImageGetterFromDevice> imageList = new ArrayList<>();
+    private ImageView selectedImage;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -119,6 +130,15 @@ public class MediaActivity extends AppCompatActivity {
                 toggle();
             }
         });
+
+
+        selectedImage = (ImageView)findViewById(R.id.selected_image);
+        RecyclerView recyclerView = (RecyclerView)findViewById(R.id.content_images);
+        ImageAdapter adapter = new ImageAdapter(imageList);
+        recyclerView.setAdapter(adapter);
+        GridLayoutManager layout = new GridLayoutManager(getBaseContext(), 4);
+        layout.setOrientation(GridLayoutManager.VERTICAL);
+        recyclerView.setLayoutManager(layout);
 
         //ADD PERMISSIONS TO ACCESS IMAGES ON PHONE
         if(ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED){
@@ -148,18 +168,131 @@ public class MediaActivity extends AppCompatActivity {
     }
 
     public void retrieveAndSetImages(){
-        imageList.clear();
-        Cursor cursor = getContentResolver().query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, null, null, null, null);
-        if(cursor !=  null){
-            cursor.moveToFirst();
 
-            for(int i = 0; i < cursor.getCount(); i++){
-                cursor.moveToPosition(i);
-                ImageGetterFromDevice image = new ImageGetterFromDevice(Uri.parse(cursor.getString(1)));
-                imageList.add(image);
+        //Run in background from the UI...
+        AsyncTask.execute(new Runnable() {
+            @Override
+            public void run() {
+                imageList.clear();
+                Cursor cursor = getContentResolver().query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, null, null, null, null);
+                if(cursor !=  null){
+                    cursor.moveToFirst();
+
+                    for(int i = 0; i < cursor.getCount(); i++){
+                        cursor.moveToPosition(i);
+                        ImageGetterFromDevice image = new ImageGetterFromDevice(Uri.parse(cursor.getString(1)));
+                        imageList.add(image);
+                    }
+                }
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        //TODO recyclerview set images
+                    }
+                });
+            }
+        });
+
+    }
+
+    public class ImageAdapter extends RecyclerView.Adapter<ImageViewHolder>{
+        private ArrayList<ImageGetterFromDevice> imagesList;
+
+        public ImageAdapter(ArrayList<ImageGetterFromDevice> imagesList) {
+            this.imagesList = imagesList;
+        }
+
+        @Override
+        public void onBindViewHolder(ImageViewHolder holder, int position) {
+            final ImageGetterFromDevice image = imagesList.get(position);
+            holder.UpdateUI(image);
+
+            final ImageViewHolder viewHolder = holder;
+            holder.itemView.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    selectedImage.setImageDrawable(viewHolder.image.getDrawable());
+                }
+            });
+        }
+
+        @Override
+        public int getItemCount() {
+            return imagesList.size();
+        }
+
+        @Override
+        public ImageViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+            View card = LayoutInflater.from(parent.getContext()).inflate(R.layout.card_image, parent, false);
+            return new ImageViewHolder(card);
+        }
+    }
+
+    public class ImageViewHolder extends RecyclerView.ViewHolder{
+        private ImageView image;
+
+        public ImageViewHolder(View itemView) {
+            super(itemView);
+            image = (ImageView)findViewById(R.id.image_thumb);
+        }
+
+        public void UpdateUI(ImageGetterFromDevice deviceImage){
+            DecodeBitmapBackground task = new DecodeBitmapBackground(image, deviceImage);
+            task.execute();
+        }
+    }
+
+    //This class decodes the image in the background from the UI.
+    class DecodeBitmapBackground extends AsyncTask<Void, Void, Bitmap>{
+        private final WeakReference<ImageView> imageViewWeakReference;
+        private ImageGetterFromDevice imageGetterFromDevice;
+
+        public DecodeBitmapBackground(ImageView image, ImageGetterFromDevice imageGetterFromDevice) {
+            this.imageViewWeakReference = new WeakReference<ImageView>(image);
+            this.imageGetterFromDevice = imageGetterFromDevice;
+        }
+
+        @Override
+        protected Bitmap doInBackground(Void... params) {
+            return decodeURI(imageGetterFromDevice.getImageResourseUri().getPath());
+        }
+
+        protected void onPostExecute(Bitmap bitmap){
+            super.onPostExecute(bitmap);
+            final ImageView img = imageViewWeakReference.get();
+
+            if(img != null){
+                img.setImageBitmap(bitmap);
             }
         }
     }
+
+    //This class converts the image and scales it down to the correct size.
+    public Bitmap decodeURI(String filepath){
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inJustDecodeBounds = true;
+
+        Boolean scaleByHeight = Math.abs(options.outHeight - 100) >= Math.abs(options.outWidth - 100);
+        if(options.outHeight * options.outWidth * 2 > 16384){
+            // Load, scaling to smallest power of 2 that'll get it <= desired dimensions
+            //adjust 1000 to make scaling to correct look!!!
+            double sampleSize = scaleByHeight
+                    ? options.outHeight / 1000
+                    : options.outWidth / 1000;
+            options.inSampleSize =
+                    (int)Math.pow(2d, Math.floor(
+                            Math.log(sampleSize)/Math.log(2d)));
+        }
+
+
+        options.inJustDecodeBounds = false;
+        options.inTempStorage = new byte[512];
+        Bitmap output = BitmapFactory.decodeFile(filepath, options);
+        return output;
+    }
+
+
+
 
     @Override
     protected void onPostCreate(Bundle savedInstanceState) {
